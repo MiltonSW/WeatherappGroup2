@@ -1,6 +1,6 @@
 # ESP32-S3-Template
 
-Welcome to the lab using the ESP32-S3 LilyGO!
+Welcome to the lab using the ESP32-S3 LilyGO! Hola
 
 This repository serves as a foundation for software engineering projects aimed at the ESP32 hardware.
 This document will guide you through the setup process and help you prepare to work with your ESP32 hardware.
