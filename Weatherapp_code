@@ -12,8 +12,8 @@
 #include <time.h>
 
 // WiFi credentials
-String ssid = "Ludwigs iPhone (2)";
-String password = "123456789";
+String ssid = "Miltons iPhone 11";
+String password = "Milton111";
 
 // Display
 TFT_eSPI tft = TFT_eSPI();
@@ -59,23 +59,18 @@ void drawMenuWithHighlight(int index);
 void showLoadingScreen(String text);
 
 void setup() {
-  // Initialize Serial for debugging
   Serial.begin(115200);
   while (!Serial);
   Serial.println("Starting ESP32 program...");
 
-  // Initialize display
   tft.init();
   tft.setRotation(1);
   tft.fillScreen(TFT_BLACK);
 
-  // Button setup
   pinMode(PIN_BUTTON_1, INPUT_PULLUP);
   pinMode(PIN_BUTTON_2, INPUT_PULLUP);
 
-  // Connect to WIFI
   WiFi.begin(ssid, password);
-
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
     tft.fillScreen(TFT_BLACK);
@@ -89,17 +84,22 @@ void setup() {
   tft.drawString("Connected to WiFi", 10, 10);
   Serial.println("Connected to WiFi");
 
-  // Show boot screen for 3 seconds
   showBootScreen();
   delay(3000);
 
-  // Move to menu
   currentScreen = MENU;
   showMenu();
 }
 
 void loop() {
   checkButtons();
+
+  if (currentScreen == FORECAST) {
+    showForecastScreen();
+    delay(10000);
+    currentScreen = MENU;
+    showMenu();
+  }
 }
 
 void checkButtons() {
@@ -107,18 +107,17 @@ void checkButtons() {
   bool button2Pressed = digitalRead(PIN_BUTTON_2) == LOW;
   unsigned long now = millis();
 
-  // Om båda knappar hålls intryckta
   if (button1Pressed && button2Pressed) {
     if (!bothButtonsHeld) {
       bothButtonsPressedStart = now;
       bothButtonsHeld = true;
     }
-    if (now - bothButtonsPressedStart > 1000) { // håll i minst 1 sekund
+    if (now - bothButtonsPressedStart > 1000) {
       currentScreen = MENU;
       menuIndex = 0;
       showMenu();
       bothButtonsHeld = false;
-      delay(500); // skydda mot studs
+      delay(500);
     }
     return;
   } else {
@@ -127,7 +126,6 @@ void checkButtons() {
 
   if (button1Pressed && (now - lastButton1Press > BUTTON_DEBOUNCE_DELAY)) {
     lastButton1Press = now;
-
     if (currentScreen == MENU) {
       menuIndex = (menuIndex + 1) % menuItemCount;
       drawMenuWithHighlight(menuIndex);
@@ -136,13 +134,11 @@ void checkButtons() {
 
   if (button2Pressed && (now - lastButton2Press > BUTTON_DEBOUNCE_DELAY)) {
     lastButton2Press = now;
-
     if (currentScreen == MENU) {
       showLoadingScreen("Loading...");
       switch (menuIndex) {
         case 0:
           currentScreen = FORECAST;
-          showForecastScreen();
           break;
         case 1:
           currentScreen = HISTORICAL;
@@ -157,17 +153,15 @@ void checkButtons() {
   }
 }
 
-// BOOT SCREEN
 void showBootScreen() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
   tft.drawString("Weather Project", 40, 40);
   tft.drawString("Group 2", 100, 70);
-  tft.drawString("v1.0", 130, 100);
+  tft.drawString("v2.0", 130, 100);
 }
 
-// MENY
 void showMenu() {
   tft.fillScreen(TFT_BLACK);
   drawMenuWithHighlight(menuIndex);
@@ -197,43 +191,85 @@ void drawMenuWithHighlight(int index) {
   tft.drawString("Btn1=Next Btn2=Select", 20, 140);
 }
 
-// LOADING SCREEN
 void showLoadingScreen(String text) {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
   tft.drawString(text, 100, 80);
-  delay(300); // visa kort
+  delay(300);
 }
 
-// FORECAST
 void showForecastScreen() {
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_CYAN, TFT_BLACK);
-  tft.setTextSize(2);
-  tft.drawString("Forecast", 100, 20);
+  HTTPClient http;
+  String smhiUrl = "https://opendata-download-metanalys.smhi.se/api/category/mesan2g/version/1/geotype/point/lon/16/lat/58/data.json";
+  http.begin(smhiUrl);
 
-  tft.setTextSize(1);
-  tft.drawString("City: Karlskrona", 40, 60);
-  tft.drawString("Temp: -- C", 40, 80);
-  tft.drawString("Weather: Loading...", 40, 100);
+  int httpCode = http.GET();
+
+  if (httpCode == HTTP_CODE_OK) {
+    auto responseText = http.getString();
+
+    DynamicJsonDocument weatherData(16384);
+    DeserializationError error = deserializeJson(weatherData, responseText);
+
+    if (!error) {
+      tft.fillScreen(TFT_BLACK);
+      tft.setCursor(5, 5);
+
+      JsonObject forecast = weatherData["timeSeries"][0];
+      JsonArray params = forecast["parameters"];
+
+      float temperature = 0.0;
+      float wind = 0.0;
+      float humidity = 0.0;
+
+      for (JsonObject item : params) {
+        String paramName = item["name"];
+        float value = item["values"][0];
+
+        if (paramName == "t")      temperature = value;
+        else if (paramName == "ws") wind = value;
+        else if (paramName == "r")  humidity = value;
+      }
+
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.setTextSize(2);
+      tft.println("Karlskrona");
+      tft.println();
+      tft.printf("Temp: %.1f C\n", temperature);
+      tft.printf("Wind: %.1f m/s\n", wind);
+      tft.printf("Humidity: %.0f%%\n", humidity);
+
+    } else {
+      tft.fillScreen(TFT_RED);
+      tft.setCursor(10, 10);
+      tft.setTextColor(TFT_WHITE, TFT_RED);
+      tft.setTextSize(2);
+      tft.println("JSON parse error!");
+    }
+  } else {
+    tft.fillScreen(TFT_RED);
+    tft.setCursor(10, 10);
+    tft.setTextColor(TFT_WHITE, TFT_RED);
+    tft.setTextSize(2);
+    tft.println("HTTP error!");
+  }
+
+  http.end();
 }
 
-// HISTORICAL
 void showHistoricalScreen() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_ORANGE, TFT_BLACK);
   tft.setTextSize(2);
   tft.drawString("Historical Data", 60, 20);
-
   tft.setTextSize(1);
   tft.drawString("Scroll with buttons", 60, 100);
 }
 
-// SETTINGS
 void showSettingsScreen() {
   tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.setTextColor(TFT_PINK, TFT_BLACK);
   tft.setTextSize(2);
   tft.drawString("Settings", 100, 20);
 
@@ -243,29 +279,4 @@ void showSettingsScreen() {
   tft.drawString("3. Reset Defaults", 40, 100);
 }
 
-// ----- TFT Pin check -----
-// DO NOT TOUCH
-#if PIN_LCD_WR  != TFT_WR || \
-    PIN_LCD_RD  != TFT_RD || \
-    PIN_LCD_CS  != TFT_CS || \
-    PIN_LCD_DC  != TFT_DC || \
-    PIN_LCD_RES != TFT_RST || \
-    PIN_LCD_D0  != TFT_D0 || \
-    PIN_LCD_D1  != TFT_D1 || \
-    PIN_LCD_D2  != TFT_D2 || \
-    PIN_LCD_D3  != TFT_D3 || \
-    PIN_LCD_D4  != TFT_D4 || \
-    PIN_LCD_D5  != TFT_D5 || \
-    PIN_LCD_D6  != TFT_D6 || \
-    PIN_LCD_D7  != TFT_D7 || \
-    PIN_LCD_BL  != TFT_BL || \
-    TFT_BACKLIGHT_ON != HIGH || \
-    170 != TFT_WIDTH || \
-    320 != TFT_HEIGHT
-#error  "Error! Please make sure <User_Setups/Setup206_LilyGo_T_Display_S3.h> is selected in <TFT_eSPI/User_Setup_Select.h>"
-#endif
-
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5,0,0)
-#error  "The current version is not supported for the time being, please use a version below Arduino ESP32 3.0"
-#endif
 
