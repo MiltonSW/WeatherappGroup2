@@ -10,59 +10,57 @@
 #include <ArduinoJson.h>
 #include <TFT_eSPI.h>
 #include <time.h>
+#include <Preferences.h>
 
-// WiFi credentials
-String ssid = "Miltons iPhone 11";
-String password = "Milton111";
+String ssid = "";
+String password = "";
 
-// Display
 TFT_eSPI tft = TFT_eSPI();
-
-// Display dimensions
 #define DISPLAY_WIDTH 320
 #define DISPLAY_HEIGHT 170
 
 WiFiClient wifi_client;
-
-// Button debounce
 #define BUTTON_DEBOUNCE_DELAY 200
 unsigned long lastButton1Press = 0;
 unsigned long lastButton2Press = 0;
-
-// För hålla-tid vid tvåknappskombination
 unsigned long bothButtonsPressedStart = 0;
 bool bothButtonsHeld = false;
 
-// Skärm-states
-enum ScreenState {
-  BOOT,
-  MENU,
-  FORECAST,
-  HISTORICAL,
-  SETTINGS
-};
-
+enum ScreenState { BOOT, MENU, FORECAST, HISTORICAL, SETTINGS, CITY_SELECT };
 ScreenState currentScreen = BOOT;
-
-// Menu navigation
-int menuIndex = 0; // 0 = Forecast, 1 = Historical, 2 = Settings
+int menuIndex = 0;
 const int menuItemCount = 3;
 
-// Funktioner
+// Stadstruktur och alternativ
+struct City {
+  String name;
+  float lat;
+  float lon;
+  String stationId;
+};
+
+City cities[] = {
+  {"Karlskrona", 56.2, 15.6, "65090"},
+  {"Stockholm",  59.3, 18.1, "98230"},
+  {"Goteborg",   57.7, 11.9, "71420"}
+};
+
+int currentCityIndex = 0;
+
+Preferences preferences;
+
 void showBootScreen();
 void showMenu();
 void showForecastScreen();
 void showHistoricalScreen();
 void showSettingsScreen();
+void showCitySelectScreen();
 void checkButtons();
 void drawMenuWithHighlight(int index);
 void showLoadingScreen(String text);
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial);
-  Serial.println("Starting ESP32 program...");
-
   tft.init();
   tft.setRotation(1);
   tft.fillScreen(TFT_BLACK);
@@ -76,24 +74,30 @@ void setup() {
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.drawString("Connecting to WiFi...", 10, 10);
-    Serial.println("Attempting to connect to WiFi...");
   }
+
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  while (time(nullptr) < 100000) {
+    delay(100);
+  }
+
+  // Läs senast valda stad
+  preferences.begin("weather", true);
+  currentCityIndex = preferences.getInt("city", 0);
+  preferences.end();
 
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.drawString("Connected to WiFi", 10, 10);
-  Serial.println("Connected to WiFi");
 
   showBootScreen();
   delay(3000);
-
   currentScreen = MENU;
   showMenu();
 }
 
 void loop() {
   checkButtons();
-
   if (currentScreen == FORECAST) {
     showForecastScreen();
     delay(10000);
@@ -129,6 +133,9 @@ void checkButtons() {
     if (currentScreen == MENU) {
       menuIndex = (menuIndex + 1) % menuItemCount;
       drawMenuWithHighlight(menuIndex);
+    } else if (currentScreen == CITY_SELECT) {
+      currentCityIndex = (currentCityIndex + 1) % 3;
+      showCitySelectScreen();
     }
   }
 
@@ -137,18 +144,18 @@ void checkButtons() {
     if (currentScreen == MENU) {
       showLoadingScreen("Loading...");
       switch (menuIndex) {
-        case 0:
-          currentScreen = FORECAST;
-          break;
-        case 1:
-          currentScreen = HISTORICAL;
-          showHistoricalScreen();
-          break;
-        case 2:
-          currentScreen = SETTINGS;
-          showSettingsScreen();
-          break;
+        case 0: currentScreen = FORECAST; break;
+        case 1: currentScreen = HISTORICAL; showHistoricalScreen(); break;
+        case 2: currentScreen = SETTINGS; showSettingsScreen(); break;
       }
+    } else if (currentScreen == CITY_SELECT) {
+      // SPARA vald stad direkt som default
+      preferences.begin("weather", false);
+      preferences.putInt("city", currentCityIndex);
+      preferences.end();
+
+      currentScreen = MENU;
+      showMenu();
     }
   }
 }
@@ -172,21 +179,10 @@ void drawMenuWithHighlight(int index) {
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
   tft.setTextSize(2);
   tft.drawString("Main Menu", 90, 20);
-
   tft.setTextSize(1);
-
-  if (index == 0) tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  else tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft.drawString("> Forecast", 40, 60);
-
-  if (index == 1) tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  else tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft.drawString("> Historical", 40, 80);
-
-  if (index == 2) tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  else tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft.drawString("> Settings", 40, 100);
-
+  tft.setTextColor(index == 0 ? TFT_WHITE : TFT_YELLOW, TFT_BLACK); tft.drawString("> Forecast", 40, 60);
+  tft.setTextColor(index == 1 ? TFT_WHITE : TFT_YELLOW, TFT_BLACK); tft.drawString("> Historical", 40, 80);
+  tft.setTextColor(index == 2 ? TFT_WHITE : TFT_YELLOW, TFT_BLACK); tft.drawString("> Settings", 40, 100);
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
   tft.drawString("Btn1=Next Btn2=Select", 20, 140);
 }
@@ -201,60 +197,34 @@ void showLoadingScreen(String text) {
 
 void showForecastScreen() {
   HTTPClient http;
-  String smhiUrl = "https://opendata-download-metanalys.smhi.se/api/category/mesan2g/version/1/geotype/point/lon/16/lat/58/data.json";
-  http.begin(smhiUrl);
+  String url = "https://opendata-download-metanalys.smhi.se/api/category/mesan2g/version/1/geotype/point/lon/" +
+               String(cities[currentCityIndex].lon, 1) + "/lat/" + String(cities[currentCityIndex].lat, 1) + "/data.json";
+  http.begin(url);
+  int code = http.GET();
+  if (code == HTTP_CODE_OK) {
+    DynamicJsonDocument doc(16384);
+    deserializeJson(doc, http.getString());
+    JsonObject forecast = doc["timeSeries"][0];
+    JsonArray params = forecast["parameters"];
 
-  int httpCode = http.GET();
-
-  if (httpCode == HTTP_CODE_OK) {
-    auto responseText = http.getString();
-
-    DynamicJsonDocument weatherData(16384);
-    DeserializationError error = deserializeJson(weatherData, responseText);
-
-    if (!error) {
-      tft.fillScreen(TFT_BLACK);
-      tft.setCursor(5, 5);
-
-      JsonObject forecast = weatherData["timeSeries"][0];
-      JsonArray params = forecast["parameters"];
-
-      float temperature = 0.0;
-      float wind = 0.0;
-      float humidity = 0.0;
-
-      for (JsonObject item : params) {
-        String paramName = item["name"];
-        float value = item["values"][0];
-
-        if (paramName == "t")      temperature = value;
-        else if (paramName == "ws") wind = value;
-        else if (paramName == "r")  humidity = value;
-      }
-
-      tft.setTextColor(TFT_WHITE, TFT_BLACK);
-      tft.setTextSize(2);
-      tft.println("Karlskrona");
-      tft.println();
-      tft.printf("Temp: %.1f C\n", temperature);
-      tft.printf("Wind: %.1f m/s\n", wind);
-      tft.printf("Humidity: %.0f%%\n", humidity);
-
-    } else {
-      tft.fillScreen(TFT_RED);
-      tft.setCursor(10, 10);
-      tft.setTextColor(TFT_WHITE, TFT_RED);
-      tft.setTextSize(2);
-      tft.println("JSON parse error!");
+    float temperature = 0, wind = 0, humidity = 0;
+    for (JsonObject item : params) {
+      String name = item["name"];
+      float val = item["values"][0];
+      if (name == "t") temperature = val;
+      else if (name == "ws") wind = val;
+      else if (name == "r") humidity = val;
     }
-  } else {
-    tft.fillScreen(TFT_RED);
-    tft.setCursor(10, 10);
-    tft.setTextColor(TFT_WHITE, TFT_RED);
-    tft.setTextSize(2);
-    tft.println("HTTP error!");
-  }
 
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextSize(2);
+    tft.setCursor(5, 5);
+    tft.println("Forecast - " + cities[currentCityIndex].name);
+    tft.printf("Temp: %.1f \xB0C\n", temperature);
+    tft.printf("Wind: %.1f m/s\n", wind);
+    tft.printf("Humidity: %.0f%%\n", humidity);
+  }
   http.end();
 }
 
@@ -262,9 +232,56 @@ void showHistoricalScreen() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_ORANGE, TFT_BLACK);
   tft.setTextSize(2);
-  tft.drawString("Historical Data", 60, 20);
+  tft.drawString("Historical - " + cities[currentCityIndex].name, 10, 10);
   tft.setTextSize(1);
-  tft.drawString("Scroll with buttons", 60, 100);
+
+  HTTPClient http;
+  String url = "https://opendata-download-metobs.smhi.se/api/version/1.0/parameter/1/station/" + cities[currentCityIndex].stationId + "/period/latest-day/data.json";
+  http.begin(url);
+  int code = http.GET();
+
+  if (code == HTTP_CODE_OK) {
+    DynamicJsonDocument doc(32768);
+    deserializeJson(doc, http.getString());
+    JsonArray values = doc["value"];
+
+    time_t now = time(nullptr);
+    now -= 86400;
+    struct tm* ti_now = gmtime(&now);
+    int latestYear = ti_now->tm_year + 1900;
+    int latestMonth = ti_now->tm_mon + 1;
+    int latestDay = ti_now->tm_mday;
+
+    int y = 40;
+    char header[32];
+    sprintf(header, "Date: %04d-%02d-%02d", latestYear, latestMonth, latestDay);
+    tft.drawString(header, 20, y);
+    y += 15;
+
+    for (JsonObject item : values) {
+      time_t t = item["date"].as<long long>() / 1000;
+      struct tm *ti = gmtime(&t);
+      if (ti->tm_year + 1900 == latestYear &&
+          ti->tm_mon + 1 == latestMonth &&
+          ti->tm_mday == latestDay &&
+          (ti->tm_hour == 0 || ti->tm_hour == 1 ||
+           ti->tm_hour == 6 || ti->tm_hour == 7 ||
+           ti->tm_hour == 12 || ti->tm_hour == 13 ||
+           ti->tm_hour == 18 || ti->tm_hour == 19)) {
+
+        float temp = item["value"];
+        char timeStr[6];
+        sprintf(timeStr, "%02d:%02d", ti->tm_hour, ti->tm_min);
+        char line[32];
+        sprintf(line, "%s - %.1f \xB0C", timeStr, temp);
+        tft.drawString(line, 20, y);
+        y += 12;
+      }
+    }
+  } else {
+    tft.drawString("HTTP Error", 40, 100);
+  }
+  http.end();
 }
 
 void showSettingsScreen() {
@@ -272,11 +289,48 @@ void showSettingsScreen() {
   tft.setTextColor(TFT_PINK, TFT_BLACK);
   tft.setTextSize(2);
   tft.drawString("Settings", 100, 20);
-
   tft.setTextSize(1);
   tft.drawString("1. Change City", 40, 60);
   tft.drawString("2. Change Parameter", 40, 80);
   tft.drawString("3. Reset Defaults", 40, 100);
+  tft.drawString("Hold Btn2 to back", 40, 130);
+
+  currentScreen = CITY_SELECT;
+  showCitySelectScreen();
 }
 
+void showCitySelectScreen() {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.drawString("Change City", 70, 20);
+  tft.setTextSize(2);
+  tft.drawString(cities[currentCityIndex].name, 100, 70);
+  tft.setTextSize(1);
+  tft.drawString("Btn1=Next Btn2=Select", 40, 130);
+}
+
+#if PIN_LCD_WR  != TFT_WR || \
+    PIN_LCD_RD  != TFT_RD || \
+    PIN_LCD_CS  != TFT_CS || \
+    PIN_LCD_DC  != TFT_DC || \
+    PIN_LCD_RES != TFT_RST || \
+    PIN_LCD_D0  != TFT_D0 || \
+    PIN_LCD_D1  != TFT_D1 || \
+    PIN_LCD_D2  != TFT_D2 || \
+    PIN_LCD_D3  != TFT_D3 || \
+    PIN_LCD_D4  != TFT_D4 || \
+    PIN_LCD_D5  != TFT_D5 || \
+    PIN_LCD_D6  != TFT_D6 || \
+    PIN_LCD_D7  != TFT_D7 || \
+    PIN_LCD_BL  != TFT_BL || \
+    TFT_BACKLIGHT_ON != HIGH || \
+    170 != TFT_WIDTH || \
+    320 != TFT_HEIGHT
+#error  "Error! Please make sure <User_Setups/Setup206_LilyGo_T_Display_S3.h> is selected in <TFT_eSPI/User_Setup_Select.h>"
+#endif
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5,0,0)
+#error  "The current version is not supported for the time being, please use a version below Arduino ESP32 3.0"
+#endif
 
