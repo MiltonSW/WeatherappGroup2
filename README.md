@@ -75,3 +75,52 @@ To connect to WiFi, you need to provide your SSID and password in the [project/p
 * `$()`: executes this command and substitutes its output.
 
 Purpose: This is useful when working with serial devices (like Arduino or other USB-connected hardware). By adding yourself to the device's group, you gain permission to access `/dev/ttyACM0` without needing sudo every time.
+
+
+
+
+[X ]US1.1: As a user, I want to see a boot screen to display the current program version 
+and team number for at least 3 seconds. 
+
+[ ]US1.2: As a user, I want to see the weather forecast in terms of temperature for 
+the next 24 hours for my selected city on the starting screen. 
+[ ]US1.2B: As a user, I want to see temperature and weather conditions with 
+symbols (e.g., clear sky, rain, snow, thunder) for the next 24 hours on the 
+starting screen. 
+
+[X ]US2.1: As a user, I want a menu to navigate between different screens using the two 
+buttons, like forecast and settings screen. 
+[ X]US2.2 As a user, I want to access the menu (overview of screens) from anywhere in 
+the program. 
+[ X]US2.2B: As a user, I want to access the menu from anywhere in the program 
+by holding both buttons simultaneously. 
+
+
+[ X]US3.1: As a user, I want to have a menu option and screen to view historical 
+weather data. 
+[ ]US3.2: As a user, I want to view historical temperature data (latest months) for a 
+selected city and interact with the graph. 
+[ ]US3.2B: As a user, I want to interact with the historical graph using the 
+two buttons to: 
+  View 7 days of data. 
+  Scroll backward or forward by 1 day.
+
+[X ]US4.1: As a user, I want to access a settings menu to configure weather data display 
+options. 
+[ ]US4.2: As a user, I want to select weather parameters (e.g., temperature, humidity, 
+wind speed) in the settings menu to customize the historical graph. 
+[ X]US4.3: As a user, I want to select di erent cities to view their weather data for the 
+historical data and starting screen forecast. 
+[ ]US4.4: As a user, I want to reset settings to default via a menu option. 
+[ X]US4.5: As a user, I want to change my default city and weather parameter, so they 
+are automatically selected when I start the device. 
+[ X]US4.6: As a user, I want the microcontroller to store my default settings so that they 
+are retained even after a restart.
+
+[ ]US5.1: As a user, I want to access a menu option and screen to view the weather 
+forecast for all of Sweden. 
+[ ]US5.2: As a user, I want to see the forecast for each administrative area of Sweden 
+(“Landskap”) on a map, with: 
+o Color-coded temperature zones. 
+o Weather symbols for each area. 
+o A looped animation displaying the hourly forecast for the next 24 hours. 
