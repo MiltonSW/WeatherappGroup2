@@ -1,54 +1,62 @@
-#include <Arduino.h>
-#include <esp_task_wdt.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_adc_cal.h"
-#include <SPI.h>
-#include "pin_config.h"
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
-#include <TFT_eSPI.h>
-#include <time.h>
-#include <Preferences.h>
+#include <Arduino.h>              // Core Arduino functionality
+#include <esp_task_wdt.h>         // Watchdog timer support
+#include "freertos/FreeRTOS.h"    // RTOS support for ESP32
+#include "freertos/task.h"        // Task utilities
+#include "esp_adc_cal.h"          // ADC calibration (not used here, included by default)
+#include <SPI.h>                  // SPI bus for TFT
+#include "pin_config.h"           // Contains custom pin definitions (buttons, TFT pins)
+#include <WiFi.h>                 // WiFi connection library
+#include <HTTPClient.h>           // HTTP GET requests
+#include <ArduinoJson.h>          // JSON parser
+#include <TFT_eSPI.h>             // TFT display driver
+#include <time.h>                 // NTP time sync
+#include <Preferences.h>          // Persistent storage for settings
 
+// WiFi credentials (fill in your own SSID/password)
 String ssid = "";
 String password = "";
 
+// Create TFT display object
 TFT_eSPI tft = TFT_eSPI();
 #define DISPLAY_WIDTH 320
 #define DISPLAY_HEIGHT 170
 
-WiFiClient wifi_client;
+WiFiClient wifi_client;  // Client for HTTP operations
+
+// Debounce handling for physical buttons
 #define BUTTON_DEBOUNCE_DELAY 200
 unsigned long lastButton1Press = 0;
 unsigned long lastButton2Press = 0;
 unsigned long bothButtonsPressedStart = 0;
 bool bothButtonsHeld = false;
 
+// States for different screens in the UI
 enum ScreenState { BOOT, MENU, FORECAST, HISTORICAL, SETTINGS, CITY_SELECT };
 ScreenState currentScreen = BOOT;
+
+// Main menu index and number of options
 int menuIndex = 0;
 const int menuItemCount = 3;
 
-// Stadstruktur och alternativ
+// Struct to hold info about each city
 struct City {
-  String name;
-  float lat;
-  float lon;
-  String stationId;
+  String name;       // Name to display
+  float lat;         // Latitude (used in forecast API)
+  float lon;         // Longitude (used in forecast API)
+  String stationId;  // SMHI station ID (used for historical data)
 };
 
+// List of cities you can toggle between
 City cities[] = {
   {"Karlskrona", 56.2, 15.6, "65090"},
   {"Stockholm",  59.3, 18.1, "98230"},
   {"Goteborg",   57.7, 11.9, "71420"}
 };
 
-int currentCityIndex = 0;
+int currentCityIndex = 0;         // Currently selected city index
+Preferences preferences;          // Used to store selected city persistently
 
-Preferences preferences;
-
+// Function declarations
 void showBootScreen();
 void showMenu();
 void showForecastScreen();
@@ -59,15 +67,17 @@ void checkButtons();
 void drawMenuWithHighlight(int index);
 void showLoadingScreen(String text);
 
+// ======================== SETUP FUNCTION ========================
 void setup() {
-  Serial.begin(115200);
-  tft.init();
-  tft.setRotation(1);
-  tft.fillScreen(TFT_BLACK);
+  Serial.begin(115200);        // For debugging
+  tft.init();                  // Initialize TFT screen
+  tft.setRotation(1);          // Landscape mode
+  tft.fillScreen(TFT_BLACK);   // Clear screen
 
   pinMode(PIN_BUTTON_1, INPUT_PULLUP);
   pinMode(PIN_BUTTON_2, INPUT_PULLUP);
 
+  // Connect to WiFi
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
@@ -76,12 +86,13 @@ void setup() {
     tft.drawString("Connecting to WiFi...", 10, 10);
   }
 
+  // Sync current time from NTP servers
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   while (time(nullptr) < 100000) {
-    delay(100);
+    delay(100);  // Wait for time to sync
   }
 
-  // Läs senast valda stad
+  // Load last selected city from flash memory
   preferences.begin("weather", true);
   currentCityIndex = preferences.getInt("city", 0);
   preferences.end();
@@ -90,27 +101,32 @@ void setup() {
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.drawString("Connected to WiFi", 10, 10);
 
+  // Show splash screen and then main menu
   showBootScreen();
   delay(3000);
   currentScreen = MENU;
   showMenu();
 }
 
+// ======================== MAIN LOOP ========================
 void loop() {
-  checkButtons();
+  checkButtons();  // Handle button input
+
   if (currentScreen == FORECAST) {
-    showForecastScreen();
-    delay(10000);
+    showForecastScreen();      // Show forecast
+    delay(10000);              // Display for 10 seconds
     currentScreen = MENU;
     showMenu();
   }
 }
 
+// ======================== BUTTON LOGIC ========================
 void checkButtons() {
   bool button1Pressed = digitalRead(PIN_BUTTON_1) == LOW;
   bool button2Pressed = digitalRead(PIN_BUTTON_2) == LOW;
   unsigned long now = millis();
 
+  // If both buttons are held for >1s → reset to main menu
   if (button1Pressed && button2Pressed) {
     if (!bothButtonsHeld) {
       bothButtonsPressedStart = now;
@@ -128,6 +144,7 @@ void checkButtons() {
     bothButtonsHeld = false;
   }
 
+  // Button 1 = navigate through menu/cities
   if (button1Pressed && (now - lastButton1Press > BUTTON_DEBOUNCE_DELAY)) {
     lastButton1Press = now;
     if (currentScreen == MENU) {
@@ -139,6 +156,7 @@ void checkButtons() {
     }
   }
 
+  // Button 2 = select current option or save city
   if (button2Pressed && (now - lastButton2Press > BUTTON_DEBOUNCE_DELAY)) {
     lastButton2Press = now;
     if (currentScreen == MENU) {
@@ -149,7 +167,7 @@ void checkButtons() {
         case 2: currentScreen = SETTINGS; showSettingsScreen(); break;
       }
     } else if (currentScreen == CITY_SELECT) {
-      // SPARA vald stad direkt som default
+      // Save selected city to flash
       preferences.begin("weather", false);
       preferences.putInt("city", currentCityIndex);
       preferences.end();
@@ -159,7 +177,7 @@ void checkButtons() {
     }
   }
 }
-
+// ======================== BOOT SCREEN ========================
 void showBootScreen() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -169,6 +187,7 @@ void showBootScreen() {
   tft.drawString("v2.0", 130, 100);
 }
 
+// ======================== MAIN MENU ========================
 void showMenu() {
   tft.fillScreen(TFT_BLACK);
   drawMenuWithHighlight(menuIndex);
@@ -180,13 +199,19 @@ void drawMenuWithHighlight(int index) {
   tft.setTextSize(2);
   tft.drawString("Main Menu", 90, 20);
   tft.setTextSize(1);
-  tft.setTextColor(index == 0 ? TFT_WHITE : TFT_YELLOW, TFT_BLACK); tft.drawString("> Forecast", 40, 60);
-  tft.setTextColor(index == 1 ? TFT_WHITE : TFT_YELLOW, TFT_BLACK); tft.drawString("> Historical", 40, 80);
-  tft.setTextColor(index == 2 ? TFT_WHITE : TFT_YELLOW, TFT_BLACK); tft.drawString("> Settings", 40, 100);
+
+  tft.setTextColor(index == 0 ? TFT_WHITE : TFT_YELLOW, TFT_BLACK); 
+  tft.drawString("> Forecast", 40, 60);
+  tft.setTextColor(index == 1 ? TFT_WHITE : TFT_YELLOW, TFT_BLACK); 
+  tft.drawString("> Historical", 40, 80);
+  tft.setTextColor(index == 2 ? TFT_WHITE : TFT_YELLOW, TFT_BLACK); 
+  tft.drawString("> Settings", 40, 100);
+
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
   tft.drawString("Btn1=Next Btn2=Select", 20, 140);
 }
 
+// ======================== LOADING SCREEN ========================
 void showLoadingScreen(String text) {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -195,16 +220,21 @@ void showLoadingScreen(String text) {
   delay(300);
 }
 
+// ======================== FORECAST SCREEN ========================
+// Fetches 1st entry from forecast and displays temp, wind, humidity
 void showForecastScreen() {
   HTTPClient http;
   String url = "https://opendata-download-metanalys.smhi.se/api/category/mesan2g/version/1/geotype/point/lon/" +
-               String(cities[currentCityIndex].lon, 1) + "/lat/" + String(cities[currentCityIndex].lat, 1) + "/data.json";
+               String(cities[currentCityIndex].lon, 1) + "/lat/" +
+               String(cities[currentCityIndex].lat, 1) + "/data.json";
+
   http.begin(url);
   int code = http.GET();
+
   if (code == HTTP_CODE_OK) {
     DynamicJsonDocument doc(16384);
     deserializeJson(doc, http.getString());
-    JsonObject forecast = doc["timeSeries"][0];
+    JsonObject forecast = doc["timeSeries"][0];  // Take the first forecast point
     JsonArray params = forecast["parameters"];
 
     float temperature = 0, wind = 0, humidity = 0;
@@ -224,10 +254,15 @@ void showForecastScreen() {
     tft.printf("Temp: %.1f \xB0C\n", temperature);
     tft.printf("Wind: %.1f m/s\n", wind);
     tft.printf("Humidity: %.0f%%\n", humidity);
+  } else {
+    tft.drawString("Forecast fetch error", 10, 50);
   }
+
   http.end();
 }
 
+// ======================== HISTORICAL SCREEN ========================
+// Fetches temperatures from 00, 01, 06, 07, 12, 13, 18, 19 hours yesterday
 void showHistoricalScreen() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_ORANGE, TFT_BLACK);
@@ -236,7 +271,9 @@ void showHistoricalScreen() {
   tft.setTextSize(1);
 
   HTTPClient http;
-  String url = "https://opendata-download-metobs.smhi.se/api/version/1.0/parameter/1/station/" + cities[currentCityIndex].stationId + "/period/latest-day/data.json";
+  String url = "https://opendata-download-metobs.smhi.se/api/version/1.0/parameter/1/station/" +
+               cities[currentCityIndex].stationId + "/period/latest-day/data.json";
+
   http.begin(url);
   int code = http.GET();
 
@@ -245,33 +282,31 @@ void showHistoricalScreen() {
     deserializeJson(doc, http.getString());
     JsonArray values = doc["value"];
 
-    time_t now = time(nullptr);
-    now -= 86400;
+    // Get yesterday's date
+    time_t now = time(nullptr) - 86400;
     struct tm* ti_now = gmtime(&now);
-    int latestYear = ti_now->tm_year + 1900;
-    int latestMonth = ti_now->tm_mon + 1;
-    int latestDay = ti_now->tm_mday;
+    int year = ti_now->tm_year + 1900;
+    int month = ti_now->tm_mon + 1;
+    int day = ti_now->tm_mday;
 
     int y = 40;
     char header[32];
-    sprintf(header, "Date: %04d-%02d-%02d", latestYear, latestMonth, latestDay);
+    sprintf(header, "Date: %04d-%02d-%02d", year, month, day);
     tft.drawString(header, 20, y);
     y += 15;
 
     for (JsonObject item : values) {
       time_t t = item["date"].as<long long>() / 1000;
       struct tm *ti = gmtime(&t);
-      if (ti->tm_year + 1900 == latestYear &&
-          ti->tm_mon + 1 == latestMonth &&
-          ti->tm_mday == latestDay &&
-          (ti->tm_hour == 0 || ti->tm_hour == 1 ||
-           ti->tm_hour == 6 || ti->tm_hour == 7 ||
-           ti->tm_hour == 12 || ti->tm_hour == 13 ||
-           ti->tm_hour == 18 || ti->tm_hour == 19)) {
+      int h = ti->tm_hour;
+      if (ti->tm_year + 1900 == year &&
+          ti->tm_mon + 1 == month &&
+          ti->tm_mday == day &&
+          (h == 0 || h == 1 || h == 6 || h == 7 || h == 12 || h == 13 || h == 18 || h == 19)) {
 
         float temp = item["value"];
         char timeStr[6];
-        sprintf(timeStr, "%02d:%02d", ti->tm_hour, ti->tm_min);
+        sprintf(timeStr, "%02d:%02d", h, ti->tm_min);
         char line[32];
         sprintf(line, "%s - %.1f \xB0C", timeStr, temp);
         tft.drawString(line, 20, y);
@@ -281,9 +316,12 @@ void showHistoricalScreen() {
   } else {
     tft.drawString("HTTP Error", 40, 100);
   }
+
   http.end();
 }
 
+// ======================== SETTINGS SCREEN ========================
+// Let user pick a new city (immediately saved on selection)
 void showSettingsScreen() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_PINK, TFT_BLACK);
@@ -291,14 +329,15 @@ void showSettingsScreen() {
   tft.drawString("Settings", 100, 20);
   tft.setTextSize(1);
   tft.drawString("1. Change City", 40, 60);
-  tft.drawString("2. Change Parameter", 40, 80);
-  tft.drawString("3. Reset Defaults", 40, 100);
+  tft.drawString("2. Change Parameter", 40, 80);  // Not implemented
+  tft.drawString("3. Reset Defaults", 40, 100);   // Not implemented
   tft.drawString("Hold Btn2 to back", 40, 130);
 
   currentScreen = CITY_SELECT;
   showCitySelectScreen();
 }
 
+// ======================== CITY SELECT SCREEN ========================
 void showCitySelectScreen() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_CYAN, TFT_BLACK);
@@ -310,6 +349,7 @@ void showCitySelectScreen() {
   tft.drawString("Btn1=Next Btn2=Select", 40, 130);
 }
 
+// ======================== COMPILE-TIME CHECKS ========================
 #if PIN_LCD_WR  != TFT_WR || \
     PIN_LCD_RD  != TFT_RD || \
     PIN_LCD_CS  != TFT_CS || \
@@ -327,10 +367,9 @@ void showCitySelectScreen() {
     TFT_BACKLIGHT_ON != HIGH || \
     170 != TFT_WIDTH || \
     320 != TFT_HEIGHT
-#error  "Error! Please make sure <User_Setups/Setup206_LilyGo_T_Display_S3.h> is selected in <TFT_eSPI/User_Setup_Select.h>"
+#error  "Error! Select Setup206_LilyGo_T_Display_S3.h in User_Setup_Select.h"
 #endif
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5,0,0)
-#error  "The current version is not supported for the time being, please use a version below Arduino ESP32 3.0"
+#error  "This version is not supported. Use Arduino ESP32 < 3.0"
 #endif
-
