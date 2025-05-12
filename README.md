@@ -114,7 +114,7 @@ historical data and starting screen forecast.
 [ ]US4.4: As a user, I want to reset settings to default via a menu option. 
 [ X]US4.5: As a user, I want to change my default city and weather parameter, so they 
 are automatically selected when I start the device. 
-[ X]US4.6: As a user, I want the microcontroller to store my default settings so that they 
+[ ]US4.6: As a user, I want the microcontroller to store my default settings so that they 
 are retained even after a restart.
 
 [ ]US5.1: As a user, I want to access a menu option and screen to view the weather 
